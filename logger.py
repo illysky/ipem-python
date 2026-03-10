@@ -179,17 +179,45 @@ class InfluxSink:
             points.append(p)
         self._write_api.write(bucket=self._bucket, org=self._org, record=points)
 
-    def write_event(self, event):
+    def write_event(self, event, event_id: str = ""):
         if not self._enabled:
             return
         from influxdb_client.client.write.point import Point
         s_dt = datetime.datetime.fromtimestamp(event.start_ns/1e9, tz=datetime.timezone.utc)
         p = (Point("voltage_event").time(s_dt)
-             .tag("event_type", event.event_type).tag("trigger", event.trigger)
-             .field("duration_ms", event.duration_ms).field("depth_pct", event.depth_pct)
-             .field("min_voltage", event.min_voltage).field("max_voltage", event.max_voltage)
-             .field("nominal_v", event.nominal_v).field("threshold_v", event.threshold_v))
+             .tag("event_type", event.event_type)
+             .tag("trigger", event.trigger)
+             .tag("event_id", event_id)
+             .field("duration_ms", event.duration_ms)
+             .field("depth_pct", event.depth_pct)
+             .field("min_voltage", event.min_voltage)
+             .field("max_voltage", event.max_voltage)
+             .field("nominal_v", event.nominal_v)
+             .field("threshold_v", event.threshold_v))
         self._write_api.write(bucket=self._bucket, org=self._org, record=p)
+
+    def write_transient_waveform(self, event, event_id: str):
+        """Write pre-event + event voltage samples to the 'transients' measurement at full 100 Hz resolution."""
+        if not self._enabled:
+            return
+        from influxdb_client.client.write.point import Point
+        points = []
+        for phase, samples in (("pre", event.pre_samples), ("event", event.event_samples)):
+            for s in samples:
+                ts = datetime.datetime.fromtimestamp(s.timestamp_ns / 1e9, tz=datetime.timezone.utc)
+                va = s.va
+                if isinstance(va, float) and math.isnan(va):
+                    continue
+                points.append(
+                    Point("transients").time(ts)
+                    .tag("event_id", event_id)
+                    .tag("event_type", event.event_type)
+                    .tag("phase", phase)
+                    .field("va", va)
+                )
+        if points:
+            self._write_api.write(bucket=self._bucket, org=self._org, record=points)
+            log.debug("Transients: %d points for %s", len(points), event_id)
 
     def close(self):
         if self._enabled:
@@ -399,8 +427,12 @@ class IPEMLogger:
 
     def _write_event(self, evt):
         log.info("Event: %s", evt.summary())
+        s_dt = datetime.datetime.fromtimestamp(evt.start_ns / 1e9, tz=datetime.timezone.utc)
+        event_id = f"{evt.event_type}-{s_dt.strftime('%Y%m%dT%H%M%S')}-{evt.start_ns % 1_000_000_000 // 1_000_000:03d}"
         self._sqlite.write_event(evt)
-        if self._csv: self._csv.write_event(evt)
-        self._influx.write_event(evt)
+        if self._csv:
+            self._csv.write_event(evt)
+        self._influx.write_event(evt, event_id=event_id)
+        self._influx.write_transient_waveform(evt, event_id=event_id)
 
 
