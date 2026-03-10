@@ -1,6 +1,5 @@
-import argparse, csv, datetime, logging, os, queue, signal, sqlite3, sys, threading, time
+import csv, datetime, logging, os, queue, sqlite3, threading, time
 from typing import Optional
-import yaml
 from atm90e36 import ATM90E36
 from dip_monitor import DipMonitor, VoltageEvent
 
@@ -304,53 +303,3 @@ class IPEMLogger:
         self._influx.write_event(evt)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="IPEM PiHat logger")
-    parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--once", action="store_true")
-    parser.add_argument("--log-level", default="INFO",
-                        choices=["DEBUG","INFO","WARNING","ERROR"])
-    args = parser.parse_args()
-
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("ipem.log")])
-
-    cfg_path = args.config
-    if not os.path.exists(cfg_path):
-        alt = "config.example.yaml"
-        if os.path.exists(alt):
-            log.warning("config.yaml not found; using %s", alt)
-            cfg_path = alt
-        else:
-            log.error("No config: %s", cfg_path)
-            sys.exit(1)
-
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f)
-
-    logger = IPEMLogger(cfg)
-
-    if args.once:
-        logger.snapshot()
-        logger._meter.close()
-        return
-
-    def _shut(sig, frame):
-        log.info("Signal %d — shutting down", sig)
-        logger.stop()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, _shut)
-    signal.signal(signal.SIGTERM, _shut)
-    logger.start()
-    try:
-        while True:
-            time.sleep(1.0)
-    except KeyboardInterrupt:
-        logger.stop()
-
-
-if __name__ == "__main__":
-    main()
