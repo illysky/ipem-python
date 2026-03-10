@@ -1,0 +1,76 @@
+# IPEM PiHat configuration
+# Copy this to config.yaml and edit for your installation.
+
+# --- SPI ---
+spi:
+  bus: 0              # /dev/spidev0.x
+  device: 0           # chip-select index (CE0 = 0, CE1 = 1)
+  speed_hz: 200000    # 200 kHz; safe starting point — increase to 1000000 if comms are stable
+  mode: 0             # Try 0 first (CircuitSetup); fall back to 3 (DitroniX C) if readings are garbage
+
+# --- I2C / PCA9671 ---
+# Out-of-the-box (all DIP switches OFF) the ATM90E36 /CS is routed through the
+# PCA9671 I2C expander.  Set enabled: false only if you flip "Local SPI" DIP to ON.
+i2c:
+  enabled: true
+  bus: 1
+  pca9671_address: 0x20   # Default when all DIP switches are OFF; each stacked board must be different
+  board_cs_bit: 9         # ATM /CS = PCA9671 Port1 bit1 = bit 9 of 16-bit word
+  pca_idle_state: 0x03FF  # P0=0xFF, P1=0x03 — CS high + DMA ctrl (from DitroniX ref)
+
+# --- Mains configuration ---
+mains:
+  nominal_voltage: 230    # V RMS (UK: 230, US: 120/240)
+  line_frequency: 50      # Hz (UK/EU: 50, US: 60)
+  phases: 1               # 1 for single-phase UK home; 3 for three-phase
+  # Single-phase: V1P/V1N used; same voltage replicated to V2/V3 inputs on board.
+  # Three-phase: V1/V2/V3 each connected independently.
+
+# --- ATM90E36 calibration ---
+# These are starting defaults for a standard IPEM PiHat with:
+#   - Voltage: resistor divider (240kΩ × 7 : 1kΩ) on board
+#   - Current: YHDC SCT-013-000 100A/50mA CT clamp
+# Calibrate Ugain first against a known-good multimeter reading.
+# Calibrate Igain against a known resistive load (rated wattage).
+calibration:
+  ugain: 20200        # Voltage RMS gain (all phases share same divider on PiHat)
+  igain_a: 33500      # Phase A current gain (SCT-013-000 default)
+  igain_b: 33500      # Phase B — set to 0 if CT not connected
+  igain_c: 33500      # Phase C — set to 0 if CT not connected
+  igain_n: 0xFD7F     # Neutral line current gain (DitroniX default; 0 if not used)
+  pga_gain: 0x0000    # PGA gain register MMode1: 0x0000 = ×1, 0x5555 = ×2
+  mmode0: 0x0187      # Metering mode: 50 Hz, 3P4W — change to 0x0D87 for 60 Hz
+
+# --- Voltage event thresholds ---
+events:
+  sag_threshold_volts: 207      # 90% of 230V — IEC 61000-4-11 standard dip threshold
+  sag_hysteresis_volts: 5       # Voltage must recover to 212V before dip is considered "ended"
+  swell_threshold_volts: 253    # 110% of 230V — IEC standard swell threshold
+  swell_hysteresis_volts: 5     # Must drop to 248V before swell is considered "ended"
+  pre_dip_buffer_seconds: 2.0   # How many seconds of history to keep before a dip starts
+
+# --- GPIO (for hardware SAG interrupt) ---
+gpio:
+  enabled: true
+  sag_interrupt_pin: 17         # BCM GPIO number connected to WarnOut or IRQ0 on PiHat
+                                # Set enabled: false to use software-only sag detection
+
+# --- Polling rates ---
+polling:
+  fast_hz: 100          # Voltage-only fast poll rate (Hz); chip updates Urms every 1-2 cycles
+  slow_interval_s: 10   # Full metering snapshot interval (seconds)
+
+# --- Local logging ---
+logging:
+  data_dir: data              # Relative to project root; will be created if absent
+  sqlite_file: ipem.db        # SQLite database filename inside data_dir
+  csv_enabled: true           # Also write CSV alongside SQLite
+  retention_days: 90          # Delete measurements older than this (0 = keep forever)
+
+# --- InfluxDB (optional — leave url blank to disable) ---
+influxdb:
+  url: ""               # e.g. http://localhost:8086 or https://influxdb.example.com
+  token: ""             # InfluxDB API token
+  org: ""               # Organisation name
+  bucket: "ipem"        # Bucket to write into
+  batch_size: 50        # Points to accumulate before flushing

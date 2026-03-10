@@ -1,0 +1,6 @@
+spidev>=3.6
+smbus2>=0.4.2
+lgpio>=0.2.2.0
+numpy>=1.24
+pyyaml>=6.0
+influxdb-client>=1.36
