@@ -1,0 +1,25 @@
+[Unit]
+Description=IPEM PiHat Power Energy Monitor
+After=network.target
+# If you're using InfluxDB locally, uncomment the line below so the logger
+# waits for it to be ready before starting:
+# After=network.target influxdb.service
+
+[Service]
+Type=simple
+User=illysky
+WorkingDirectory=/home/illysky/ipem
+ExecStart=/home/illysky/ipem/.venv/bin/python3 /home/illysky/ipem/ipem.py --log
+Restart=on-failure
+RestartSec=10
+# Give the SPI/I2C bus a moment to settle before the first restart attempt
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Capture logs via journald (view with: journalctl -u ipem -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ipem
+
+[Install]
+WantedBy=multi-user.target

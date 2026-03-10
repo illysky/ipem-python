@@ -58,8 +58,9 @@ gpio:
 
 # --- Polling rates ---
 polling:
-  fast_hz: 100          # Voltage-only fast poll rate (Hz); chip updates Urms every 1-2 cycles
-  slow_interval_s: 10   # Full metering snapshot interval (seconds)
+  fast_hz: 100          # Voltage-only fast poll rate (Hz) — DipMonitor only
+  sample_hz: 30         # Measurement sampling rate (Hz); 30 matches the ATM90E36's ~30 Hz Urms update
+  flush_interval_s: 10  # Seconds between InfluxDB batch writes (~30 × 10 = 300 pts per flush)
 
 # --- Local logging ---
 logging:
@@ -70,8 +71,8 @@ logging:
 
 # --- InfluxDB (optional — leave url blank to disable) ---
 influxdb:
-  url: ""               # e.g. http://localhost:8086 or https://influxdb.example.com
-  token: ""             # InfluxDB API token
-  org: ""               # Organisation name
-  bucket: "ipem"        # Bucket to write into
-  batch_size: 50        # Points to accumulate before flushing
+  url: "http://solar.illysky.io:8086"
+  token: "F1Pibuj0Q-FcS7hHCUajblEi9W3hbsSjCeu5XqnQULCRu24VC06aebso3V0hTAvOOAQbB1iNeocYWYhARi9T4g=="
+  org: "illysky"
+  bucket: "ipem"
+  batch_size: 10        # Flush every 10 points (~100 s at 10 s interval)

@@ -240,7 +240,7 @@ class DipMonitor:
 
     def _on_hw_sag(self, chip, gpio, level, tick):
         """lgpio callback — fires when WarnOut/IRQ0 pin goes high."""
-        self._hw_trigger_ns = time.perf_counter_ns()
+        self._hw_trigger_ns = time.time_ns()
         self._hw_triggered = True
         log.debug("Hardware SAG interrupt at %d ns", self._hw_trigger_ns)
 
@@ -259,11 +259,16 @@ class DipMonitor:
                 time.sleep(sleep_for)
             next_sample_time += self._interval
 
-            ts_ns = time.perf_counter_ns()
+            ts_ns = time.time_ns()
             try:
                 va, vb, vc = self._meter.get_voltages()
             except Exception as exc:
                 log.warning("SPI read error in fast poll: %s", exc)
+                continue
+
+            # ATM90E36 returns 0xFFFF (→ 655.35 V) when the Urms register
+            # hasn't been updated yet — discard these as invalid samples.
+            if va > 500.0 or vb > 500.0 or vc > 500.0:
                 continue
 
             sample = VoltageSample(timestamp_ns=ts_ns, va=va, vb=vb, vc=vc)

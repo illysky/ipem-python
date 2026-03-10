@@ -1,4 +1,4 @@
-import csv, datetime, logging, os, queue, sqlite3, threading, time
+import csv, datetime, logging, math, os, queue, sqlite3, statistics, threading, time
 from typing import Optional
 from atm90e36 import ATM90E36
 from dip_monitor import DipMonitor, VoltageEvent
@@ -161,9 +161,23 @@ class InfluxSink:
         from influxdb_client.client.write.point import Point
         p = Point("power_mains").time(ts)
         for k, v in data.items():
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
                 p = p.field(k, v)
         self._write_api.write(bucket=self._bucket, org=self._org, record=p)
+
+    def write_batch(self, samples):
+        """Write a list of (datetime, data-dict) samples as individual InfluxDB points."""
+        if not self._enabled or not samples:
+            return
+        from influxdb_client.client.write.point import Point
+        points = []
+        for ts, data in samples:
+            p = Point("power_mains").time(ts)
+            for k, v in data.items():
+                if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
+                    p = p.field(k, v)
+            points.append(p)
+        self._write_api.write(bucket=self._bucket, org=self._org, record=points)
 
     def write_event(self, event):
         if not self._enabled:
@@ -230,14 +244,24 @@ class IPEMLogger:
             poll_hz=poll.get("fast_hz",100.0),
             pre_buffer_s=events.get("pre_dip_buffer_seconds",2.0),
             gpio_pin=gpio_pin, event_queue=self._event_q)
-        self._slow_interval = poll.get("slow_interval_s",10.0)
+        # sample_hz: measurement sampling rate (default 30 Hz)
+        # flush_interval_s: how often to write buffered samples (default 10 s)
+        # slow_interval_s is accepted as a legacy alias for flush_interval_s
+        self._sample_hz = float(poll.get("sample_hz", 30.0))
+        self._flush_interval_s = float(
+            poll.get("flush_interval_s", poll.get("slow_interval_s", 10.0))
+        )
 
     def start(self):
         self._running = True
         self._dip.start()
-        threading.Thread(target=self._slow_loop, name="SlowMeter", daemon=True).start()
+        threading.Thread(target=self._sample_loop, name="SampleLoop", daemon=True).start()
         threading.Thread(target=self._event_drain, name="EventDrain", daemon=True).start()
-        log.info("IPEMLogger running | slow=%.0fs", self._slow_interval)
+        log.info(
+            "IPEMLogger running | sample=%.0fHz flush=%.0fs (~%d pts/flush)",
+            self._sample_hz, self._flush_interval_s,
+            round(self._sample_hz * self._flush_interval_s),
+        )
 
     def stop(self):
         self._running = False
@@ -258,28 +282,82 @@ class IPEMLogger:
             print(f"  {k:<26}: {v:.4f}" if isinstance(v, float) else f"  {k:<26}: {v}")
         return data
 
-    def _slow_loop(self):
+    def _sample_loop(self):
+        """
+        High-rate sampling loop.
+
+        Reads core power fields at `_sample_hz` Hz and accumulates them in a
+        buffer.  Every `_flush_interval_s` seconds the buffer is flushed:
+          - All individual samples → InfluxDB (full time resolution)
+          - One aggregated mean row  → SQLite + CSV (compact local storage)
+        """
+        interval = 1.0 / self._sample_hz
+        flush_count = max(1, round(self._sample_hz * self._flush_interval_s))
+        buffer = []
         nxt = time.perf_counter()
-        tick = 0
+        purge_tick = 0
+
         while self._running:
             sl = nxt - time.perf_counter()
             if sl > 0:
                 time.sleep(sl)
-            nxt += self._slow_interval
+            nxt += interval
+
             try:
-                data = self._meter.read_all()
+                data = self._meter.read_fast()
                 ts = datetime.datetime.now(tz=datetime.timezone.utc)
-                self._write_meas(ts, data)
-                log.debug("Slow | Va=%.2f Pa=%.1fW PF=%.3f Freq=%.2fHz", data["va"], data["p_total"], data["pf_total"], data["frequency"])
+                buffer.append((ts, data))
             except Exception as exc:
-                log.error("Slow loop: %s", exc, exc_info=True)
-            tick += 1
-            if tick >= 360:
-                tick = 0
+                log.error("Sample loop: %s", exc, exc_info=True)
+                continue
+
+            if len(buffer) >= flush_count:
+                to_flush, buffer = buffer, []
                 try:
-                    self._sqlite.purge_old(self._retention)
+                    self._flush_samples(to_flush)
                 except Exception as exc:
-                    log.warning("Purge: %s", exc)
+                    log.error("Flush: %s", exc, exc_info=True)
+                purge_tick += 1
+                if purge_tick >= 360:
+                    purge_tick = 0
+                    try:
+                        self._sqlite.purge_old(self._retention)
+                    except Exception as exc:
+                        log.warning("Purge: %s", exc)
+
+        if buffer:
+            try:
+                self._flush_samples(buffer)
+            except Exception as exc:
+                log.error("Final flush: %s", exc)
+
+    def _flush_samples(self, samples):
+        """Flush a batch of samples: all to InfluxDB, one mean row to SQLite/CSV."""
+        if not samples:
+            return
+        self._influx.write_batch(samples)
+        ts_mid = samples[len(samples) // 2][0]
+        data_agg = self._aggregate(samples)
+        self._sqlite.write_measurement(ts_mid, data_agg)
+        if self._csv:
+            self._csv.write_measurement(ts_mid, data_agg)
+        log.debug(
+            "Flush %d samples → InfluxDB | Va=%.2fV Pa=%.1fW PF=%.3f",
+            len(samples),
+            data_agg.get("va", float("nan")),
+            data_agg.get("p_total", float("nan")),
+            data_agg.get("pf_total", float("nan")),
+        )
+
+    @staticmethod
+    def _aggregate(samples):
+        """Return per-field mean across all samples, skipping NaN/None."""
+        buckets: dict = {}
+        for _, data in samples:
+            for k, v in data.items():
+                if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)):
+                    buckets.setdefault(k, []).append(v)
+        return {k: statistics.mean(vals) for k, vals in buckets.items() if vals}
 
     def _event_drain(self):
         while self._running:
@@ -290,11 +368,6 @@ class IPEMLogger:
                 pass
             except Exception as exc:
                 log.error("Event drain: %s", exc, exc_info=True)
-
-    def _write_meas(self, ts, data):
-        self._sqlite.write_measurement(ts, data)
-        if self._csv: self._csv.write_measurement(ts, data)
-        self._influx.write_measurement(ts, data)
 
     def _write_event(self, evt):
         log.info("Event: %s", evt.summary())

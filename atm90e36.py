@@ -14,6 +14,7 @@ Register scaling from CircuitSetup ATM90E36.h/.cpp and DitroniX atm90e36a.c.
 """
 
 import math
+import threading
 import time
 import logging
 import spidev
@@ -249,6 +250,11 @@ class ATM90E36:
             self._i2c = smbus2.SMBus(i2c_bus)
             self._pca_write(self._pca_state)  # set idle state (CS deasserted)
 
+        # Shared lock: the fast-poll thread (DipMonitor) and slow-loop thread
+        # both call into this driver concurrently; all SPI/I2C access must be
+        # serialised to prevent interleaved transactions corrupting register reads.
+        self._bus_lock = threading.Lock()
+
         self._ugain = 20200
         self._igain_a = 33500
         self._igain_b = 33500
@@ -294,14 +300,15 @@ class ATM90E36:
             value & 0xFF,
         ]
 
-        if self._i2c is not None:
-            self._cs_assert()
-            time.sleep(4e-6)
-            rx = self._spi.xfer2(tx)
-            time.sleep(4e-6)
-            self._cs_deassert()
-        else:
-            rx = self._spi.xfer2(tx)
+        with self._bus_lock:
+            if self._i2c is not None:
+                self._cs_assert()
+                time.sleep(4e-6)
+                rx = self._spi.xfer2(tx)
+                time.sleep(4e-6)
+                self._cs_deassert()
+            else:
+                rx = self._spi.xfer2(tx)
 
         result = (rx[2] << 8) | rx[3]
         return result
@@ -478,13 +485,13 @@ class ATM90E36:
     # ------------------------------------------------------------------
 
     def get_voltage_a(self) -> float:
-        return self.read_reg(REG_URMS_A) / 100.0
+        return self._u16(self.read_reg(REG_URMS_A), 100.0)
 
     def get_voltage_b(self) -> float:
-        return self.read_reg(REG_URMS_B) / 100.0
+        return self._u16(self.read_reg(REG_URMS_B), 100.0)
 
     def get_voltage_c(self) -> float:
-        return self.read_reg(REG_URMS_C) / 100.0
+        return self._u16(self.read_reg(REG_URMS_C), 100.0)
 
     def get_voltages(self) -> tuple:
         """Return (Va, Vb, Vc) in one call — minimises SPI round-trips for fast polling."""
@@ -495,21 +502,21 @@ class ATM90E36:
     # ------------------------------------------------------------------
 
     def get_current_a(self) -> float:
-        return self.read_reg(REG_IRMS_A) / 1000.0
+        return self._u16(self.read_reg(REG_IRMS_A), 1000.0)
 
     def get_current_b(self) -> float:
-        return self.read_reg(REG_IRMS_B) / 1000.0
+        return self._u16(self.read_reg(REG_IRMS_B), 1000.0)
 
     def get_current_c(self) -> float:
-        return self.read_reg(REG_IRMS_C) / 1000.0
+        return self._u16(self.read_reg(REG_IRMS_C), 1000.0)
 
     def get_current_n_sampled(self) -> float:
         """Sampled neutral current (IrmsN1)."""
-        return self.read_reg(REG_IRMS_N1) / 1000.0
+        return self._u16(self.read_reg(REG_IRMS_N1), 1000.0)
 
     def get_current_n_calculated(self) -> float:
         """Calculated neutral current (IrmsN0)."""
-        return self.read_reg(REG_IRMS_N0) / 1000.0
+        return self._u16(self.read_reg(REG_IRMS_N0), 1000.0)
 
     # ------------------------------------------------------------------
     # Active power (W)
@@ -590,7 +597,7 @@ class ATM90E36:
     # ------------------------------------------------------------------
 
     def get_frequency(self) -> float:
-        return self.read_reg(REG_FREQ) / 100.0
+        return self._u16(self.read_reg(REG_FREQ), 100.0)
 
     # ------------------------------------------------------------------
     # THD+N (Total Harmonic Distortion + Noise)
@@ -598,22 +605,22 @@ class ATM90E36:
     # ------------------------------------------------------------------
 
     def get_thd_voltage_a(self) -> float:
-        return self.read_reg(REG_THD_NUA) / 100.0
+        return self._u16(self.read_reg(REG_THD_NUA), 100.0)
 
     def get_thd_voltage_b(self) -> float:
-        return self.read_reg(REG_THD_NUB) / 100.0
+        return self._u16(self.read_reg(REG_THD_NUB), 100.0)
 
     def get_thd_voltage_c(self) -> float:
-        return self.read_reg(REG_THD_NUC) / 100.0
+        return self._u16(self.read_reg(REG_THD_NUC), 100.0)
 
     def get_thd_current_a(self) -> float:
-        return self.read_reg(REG_THD_NIA) / 100.0
+        return self._u16(self.read_reg(REG_THD_NIA), 100.0)
 
     def get_thd_current_b(self) -> float:
-        return self.read_reg(REG_THD_NIB) / 100.0
+        return self._u16(self.read_reg(REG_THD_NIB), 100.0)
 
     def get_thd_current_c(self) -> float:
-        return self.read_reg(REG_THD_NIC) / 100.0
+        return self._u16(self.read_reg(REG_THD_NIC), 100.0)
 
     # ------------------------------------------------------------------
     # Phase and voltage angles (degrees)
@@ -731,6 +738,33 @@ class ATM90E36:
         return False
 
     # ------------------------------------------------------------------
+    # Fast snapshot — core power fields for high-rate sampling
+    # ------------------------------------------------------------------
+
+    def read_fast(self) -> dict:
+        """
+        Read the 12 most useful metering fields as quickly as possible.
+        Intended for the high-rate sample loop (~30 Hz).  Reads fewer
+        registers than read_all() so each call completes in ~4-8 ms
+        even with the I2C CS expander, keeping the bus free for the
+        DipMonitor voltage poll.
+        """
+        return {
+            "va":         self.get_voltage_a(),
+            "ia":         self.get_current_a(),
+            "in_sampled": self.get_current_n_sampled(),
+            "pa":         self.get_active_power_a(),
+            "qa":         self.get_reactive_power_a(),
+            "sa":         self.get_apparent_power_a(),
+            "p_total":    self.get_active_power_total(),
+            "q_total":    self.get_reactive_power_total(),
+            "s_total":    self.get_apparent_power_total(),
+            "pf_a":       self.get_pf_a(),
+            "pf_total":   self.get_pf_total(),
+            "frequency":  self.get_frequency(),
+        }
+
+    # ------------------------------------------------------------------
     # Full snapshot — all metering values in one dict
     # ------------------------------------------------------------------
 
@@ -819,6 +853,19 @@ class ATM90E36:
         if value >= 0x8000:
             return value - 0x10000
         return value
+
+    @staticmethod
+    def _u16(raw: int, divisor: float) -> float:
+        """Scale a raw unsigned 16-bit register value.
+
+        The ATM90E36 outputs 0xFFFF on Urms/Irms/Freq/THD registers when the
+        chip hasn't yet computed a fresh value (e.g. just after a reset, or
+        during the inter-cycle update window).  Returning NaN lets callers
+        discard the reading rather than treating it as a real measurement.
+        """
+        if raw == 0xFFFF:
+            return float("nan")
+        return raw / divisor
 
     def close(self):
         """Release SPI (and I2C if open)."""
