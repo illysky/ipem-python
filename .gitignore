@@ -13,8 +13,8 @@ data/
 *.db
 *.csv
 
-# Config with secrets/tokens
-config.yaml
+# Uncomment below to exclude config from git (if it contains secrets like InfluxDB tokens)
+# config.yaml
 
 # IDE
 .vscode/
