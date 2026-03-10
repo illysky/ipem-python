@@ -58,9 +58,10 @@ gpio:
 
 # --- Polling rates ---
 polling:
-  fast_hz: 100          # Voltage-only fast poll rate (Hz) — DipMonitor only
-  sample_hz: 30         # Measurement sampling rate (Hz); 30 matches the ATM90E36's ~30 Hz Urms update
-  flush_interval_s: 10  # Seconds between InfluxDB batch writes (~30 × 10 = 300 pts per flush)
+  fast_hz: 100              # Voltage-only fast poll rate (Hz) — DipMonitor only
+  sample_hz: 30             # Measurement sampling rate (Hz); 30 matches ATM90E36 ~30 Hz Urms update
+  flush_interval_s: 10      # Seconds between InfluxDB batch writes (~30 × 10 = 300 pts per flush)
+  slow_read_interval_s: 30  # How often to read temperature + cumulative energy + status registers
 
 # --- Local logging ---
 logging:

@@ -743,25 +743,62 @@ class ATM90E36:
 
     def read_fast(self) -> dict:
         """
-        Read the 12 most useful metering fields as quickly as possible.
-        Intended for the high-rate sample loop (~30 Hz).  Reads fewer
-        registers than read_all() so each call completes in ~4-8 ms
-        even with the I2C CS expander, keeping the bus free for the
-        DipMonitor voltage poll.
+        Read all real-time metering fields for Phase A (plus totals) at high rate.
+        Omits slowly-changing values (temperature, cumulative energy, status) —
+        those are handled by read_slow() every ~30 s.
+        At 200 kHz SPI / 100 kHz I2C this completes in roughly 10–15 ms,
+        keeping the effective sample rate above 30 Hz.
         """
         return {
-            "va":         self.get_voltage_a(),
-            "ia":         self.get_current_a(),
-            "in_sampled": self.get_current_n_sampled(),
-            "pa":         self.get_active_power_a(),
-            "qa":         self.get_reactive_power_a(),
-            "sa":         self.get_apparent_power_a(),
-            "p_total":    self.get_active_power_total(),
-            "q_total":    self.get_reactive_power_total(),
-            "s_total":    self.get_apparent_power_total(),
-            "pf_a":       self.get_pf_a(),
-            "pf_total":   self.get_pf_total(),
-            "frequency":  self.get_frequency(),
+            # Voltage
+            "va":            self.get_voltage_a(),
+            # Current
+            "ia":            self.get_current_a(),
+            "in_sampled":    self.get_current_n_sampled(),
+            "in_calculated": self.get_current_n_calculated(),
+            # Active power
+            "pa":            self.get_active_power_a(),
+            "p_total":       self.get_active_power_total(),
+            # Reactive power
+            "qa":            self.get_reactive_power_a(),
+            "q_total":       self.get_reactive_power_total(),
+            # Apparent power
+            "sa":            self.get_apparent_power_a(),
+            "s_total":       self.get_apparent_power_total(),
+            # Power factor (total and fundamental)
+            "pf_a":          self.get_pf_a(),
+            "pf_total":      self.get_pf_total(),
+            "pf_a_fund":     self.get_fundamental_power_a(),
+            "p_total_fund":  self.get_fundamental_power_total(),
+            # Harmonic power
+            "pa_harm":       self.get_harmonic_power_a(),
+            "p_total_harm":  self.get_harmonic_power_total(),
+            # THD+N (Phase A only — B/C not wired)
+            "thd_va":        self.get_thd_voltage_a(),
+            "thd_ia":        self.get_thd_current_a(),
+            # Phase angle
+            "phase_angle_a": self.get_phase_angle_a(),
+            # Grid frequency
+            "frequency":     self.get_frequency(),
+            # System status (single register — cheap health check)
+            "sys_status0":   self.get_sys_status0(),
+        }
+
+    def read_slow(self) -> dict:
+        """
+        Read slowly-changing values: temperature, cumulative energy counters,
+        and the remaining status registers.  Call every ~30 s alongside
+        the high-rate read_fast() loop.
+        """
+        return {
+            "temperature":   self.get_temperature(),
+            "import_kwh":    self.get_import_energy_kwh(),
+            "export_kwh":    self.get_export_energy_kwh(),
+            "reactive_varh": self.get_reactive_energy_total_wh(),
+            "apparent_vah":  self.get_apparent_energy_total_wh(),
+            "sys_status1":   self.get_sys_status1(),
+            "meter_status0": self.get_meter_status0(),
+            "meter_status1": self.get_meter_status1(),
         }
 
     # ------------------------------------------------------------------

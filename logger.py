@@ -247,10 +247,12 @@ class IPEMLogger:
         # sample_hz: measurement sampling rate (default 30 Hz)
         # flush_interval_s: how often to write buffered samples (default 10 s)
         # slow_interval_s is accepted as a legacy alias for flush_interval_s
+        # slow_read_interval_s: how often to read temperature + energy totals (default 30 s)
         self._sample_hz = float(poll.get("sample_hz", 30.0))
         self._flush_interval_s = float(
             poll.get("flush_interval_s", poll.get("slow_interval_s", 10.0))
         )
+        self._slow_read_interval_s = float(poll.get("slow_read_interval_s", 30.0))
 
     def start(self):
         self._running = True
@@ -258,9 +260,10 @@ class IPEMLogger:
         threading.Thread(target=self._sample_loop, name="SampleLoop", daemon=True).start()
         threading.Thread(target=self._event_drain, name="EventDrain", daemon=True).start()
         log.info(
-            "IPEMLogger running | sample=%.0fHz flush=%.0fs (~%d pts/flush)",
+            "IPEMLogger running | sample=%.0fHz flush=%.0fs (~%d pts/flush) slow=%.0fs",
             self._sample_hz, self._flush_interval_s,
             round(self._sample_hz * self._flush_interval_s),
+            self._slow_read_interval_s,
         )
 
     def stop(self):
@@ -286,16 +289,21 @@ class IPEMLogger:
         """
         High-rate sampling loop.
 
-        Reads core power fields at `_sample_hz` Hz and accumulates them in a
-        buffer.  Every `_flush_interval_s` seconds the buffer is flushed:
+        Reads real-time power fields at `_sample_hz` Hz and accumulates them
+        in a buffer.  Every `_flush_interval_s` seconds the buffer is flushed:
           - All individual samples → InfluxDB (full time resolution)
           - One aggregated mean row  → SQLite + CSV (compact local storage)
+
+        Additionally, every `_slow_read_interval_s` seconds a separate slow
+        read (temperature, cumulative energy, status) is written as a single
+        point to InfluxDB and to SQLite/CSV.
         """
         interval = 1.0 / self._sample_hz
         flush_count = max(1, round(self._sample_hz * self._flush_interval_s))
         buffer = []
         nxt = time.perf_counter()
         purge_tick = 0
+        last_slow_ts = 0.0
 
         while self._running:
             sl = nxt - time.perf_counter()
@@ -324,6 +332,26 @@ class IPEMLogger:
                         self._sqlite.purge_old(self._retention)
                     except Exception as exc:
                         log.warning("Purge: %s", exc)
+
+            # Slow read: temperature, cumulative energy, status registers
+            now_wall = time.time()
+            if now_wall - last_slow_ts >= self._slow_read_interval_s:
+                last_slow_ts = now_wall
+                try:
+                    slow_data = self._meter.read_slow()
+                    slow_ts = datetime.datetime.now(tz=datetime.timezone.utc)
+                    self._influx.write_measurement(slow_ts, slow_data)
+                    self._sqlite.write_measurement(slow_ts, slow_data)
+                    if self._csv:
+                        self._csv.write_measurement(slow_ts, slow_data)
+                    log.debug(
+                        "Slow read | temp=%.1f°C import=%.4f kWh export=%.4f kWh",
+                        slow_data.get("temperature", float("nan")),
+                        slow_data.get("import_kwh", float("nan")),
+                        slow_data.get("export_kwh", float("nan")),
+                    )
+                except Exception as exc:
+                    log.error("Slow read: %s", exc, exc_info=True)
 
         if buffer:
             try:
