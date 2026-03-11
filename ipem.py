@@ -64,6 +64,9 @@ def _build_meter(cfg):
         igain_b=cal.get("igain_b", 33500),
         igain_c=cal.get("igain_c", 33500),
         igain_n=cal.get("igain_n", 0xFD7F),
+        ct_polarity_a=cal.get("ct_polarity_a", 1),
+        ct_polarity_b=cal.get("ct_polarity_b", 1),
+        ct_polarity_c=cal.get("ct_polarity_c", 1),
     )
 
     events = cfg.get("events", {})

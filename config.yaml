@@ -34,12 +34,13 @@ mains:
 # Calibrate Ugain first against a known-good multimeter reading.
 # Calibrate Igain against a known resistive load (rated wattage).
 calibration:
-  ugain: 64585        # Calibrated against multimeter (236.6V actual / 74.0V reported × 20200)
-  igain_a: 33500      # Phase A current gain (SCT-013-000 default)
+  ugain: 32293        # Half of 64585 — PGA ×2 doubles the voltage signal
+  igain_a: 33500      # Phase A — DitroniX default for SCT-013-000 with PGA ×2
   igain_b: 33500      # Phase B — set to 0 if CT not connected
   igain_c: 33500      # Phase C — set to 0 if CT not connected
-  igain_n: 0xFD7F     # Neutral line current gain (DitroniX default; 0 if not used)
-  pga_gain: 0x0000    # PGA gain register MMode1: 0x0000 = ×1, 0x5555 = ×2
+  igain_n: 0xFD7F     # Neutral line current gain (DitroniX default)
+  pga_gain: 0x5555    # DitroniX default — PGA ×2 on all channels
+  ct_polarity_a: -1   # -1 = CT installed backwards on phase A; +1 = normal
   mmode0: 0x0187      # Metering mode: 50 Hz, 3P4W — change to 0x0D87 for 60 Hz
 
 # --- Voltage event thresholds ---

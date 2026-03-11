@@ -250,7 +250,10 @@ class IPEMLogger:
             line_freq_reg=cal.get("mmode0",0x0187), pga_gain=cal.get("pga_gain",0),
             ugain=cal.get("ugain",20200), igain_a=cal.get("igain_a",33500),
             igain_b=cal.get("igain_b",33500), igain_c=cal.get("igain_c",33500),
-            igain_n=cal.get("igain_n",0xFD7F))
+            igain_n=cal.get("igain_n",0xFD7F),
+            ct_polarity_a=cal.get("ct_polarity_a",1),
+            ct_polarity_b=cal.get("ct_polarity_b",1),
+            ct_polarity_c=cal.get("ct_polarity_c",1))
         self._meter.configure_sag(threshold_v=events.get("sag_threshold_volts",207.0))
 
         data_dir = lc.get("data_dir","data")

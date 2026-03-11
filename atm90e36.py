@@ -197,6 +197,7 @@ _BLOCK_START     = 0x5678
 _BLOCK_LOCK      = 0x8765
 _PL_CONST_H      = 0x0861
 _PL_CONST_L      = 0xC468
+_PL_CONSTANT     = (_PL_CONST_H << 16) | _PL_CONST_L  # 140,625,000
 
 
 class ATM90E36:
@@ -260,6 +261,9 @@ class ATM90E36:
         self._igain_b = 33500
         self._igain_c = 33500
         self._igain_n = 0xFD7F
+        self._ct_polarity_a = 1
+        self._ct_polarity_b = 1
+        self._ct_polarity_c = 1
 
     # ------------------------------------------------------------------
     # Low-level SPI communication
@@ -364,22 +368,29 @@ class ATM90E36:
         igain_b: int = 33500,
         igain_c: int = 33500,
         igain_n: int = 0xFD7F,
+        ct_polarity_a: int = 1,
+        ct_polarity_b: int = 1,
+        ct_polarity_c: int = 1,
     ):
         """
         Initialise the ATM90E36 for metering.
 
-        line_freq_reg : MMode0 register value.
-                        0x0187 = 50 Hz 3P4W (UK/EU default)
-                        0x0D87 = 60 Hz 3P4W (US)
-        pga_gain      : MMode1 — PGA gain. 0x0000 = ×1, 0x5555 = ×2.
-        ugain         : Voltage RMS gain (all three phases share this on PiHat).
-        igain_a/b/c/n : Current RMS gain per channel.
+        line_freq_reg    : MMode0 register value.
+                           0x0187 = 50 Hz 3P4W (UK/EU default)
+                           0x0D87 = 60 Hz 3P4W (US)
+        pga_gain         : MMode1 — PGA gain. 0x0000 = ×1, 0x5555 = ×2.
+        ugain            : Voltage RMS gain (all three phases share this on PiHat).
+        igain_a/b/c/n    : Current RMS gain per channel.
+        ct_polarity_a/b/c: +1 or -1 — software sign flip for CT installed backwards.
         """
-        self._ugain   = ugain
-        self._igain_a = igain_a
-        self._igain_b = igain_b
-        self._igain_c = igain_c
-        self._igain_n = igain_n
+        self._ugain        = ugain
+        self._igain_a      = igain_a
+        self._igain_b      = igain_b
+        self._igain_c      = igain_c
+        self._igain_n      = igain_n
+        self._ct_polarity_a = ct_polarity_a
+        self._ct_polarity_b = ct_polarity_b
+        self._ct_polarity_c = ct_polarity_c
 
         log.info("Resetting ATM90E36...")
         self.write_reg(REG_SOFT_RESET, _SOFT_RESET_VAL)
@@ -523,7 +534,7 @@ class ATM90E36:
     # ------------------------------------------------------------------
 
     def get_active_power_a(self) -> float:
-        return self._signed16(self.read_reg(REG_PMEAN_A)) / 1000.0
+        return self._signed16(self.read_reg(REG_PMEAN_A)) / 1000.0 * self._ct_polarity_a
 
     def get_active_power_b(self) -> float:
         return self._signed16(self.read_reg(REG_PMEAN_B)) / 1000.0
@@ -532,7 +543,7 @@ class ATM90E36:
         return self._signed16(self.read_reg(REG_PMEAN_C)) / 1000.0
 
     def get_active_power_total(self) -> float:
-        return self._signed16(self.read_reg(REG_PMEAN_T)) / 250.0
+        return self._signed16(self.read_reg(REG_PMEAN_T)) / 250.0 * self._ct_polarity_a
 
     def get_active_power_a_32(self) -> float:
         """32-bit active power for phase A — higher resolution."""
@@ -549,7 +560,7 @@ class ATM90E36:
     # ------------------------------------------------------------------
 
     def get_reactive_power_a(self) -> float:
-        return self._signed16(self.read_reg(REG_QMEAN_A)) / 1000.0
+        return self._signed16(self.read_reg(REG_QMEAN_A)) / 1000.0 * self._ct_polarity_a
 
     def get_reactive_power_b(self) -> float:
         return self._signed16(self.read_reg(REG_QMEAN_B)) / 1000.0
@@ -558,14 +569,14 @@ class ATM90E36:
         return self._signed16(self.read_reg(REG_QMEAN_C)) / 1000.0
 
     def get_reactive_power_total(self) -> float:
-        return self._signed16(self.read_reg(REG_QMEAN_T)) / 250.0
+        return self._signed16(self.read_reg(REG_QMEAN_T)) / 250.0 * self._ct_polarity_a
 
     # ------------------------------------------------------------------
     # Apparent power (VA)
     # ------------------------------------------------------------------
 
     def get_apparent_power_a(self) -> float:
-        return self._signed16(self.read_reg(REG_SMEAN_A)) / 1000.0
+        return abs(self._signed16(self.read_reg(REG_SMEAN_A)) / 1000.0)
 
     def get_apparent_power_b(self) -> float:
         return self._signed16(self.read_reg(REG_SMEAN_B)) / 1000.0
@@ -574,14 +585,14 @@ class ATM90E36:
         return self._signed16(self.read_reg(REG_SMEAN_C)) / 1000.0
 
     def get_apparent_power_total(self) -> float:
-        return self._signed16(self.read_reg(REG_SMEAN_T)) / 250.0
+        return abs(self._signed16(self.read_reg(REG_SMEAN_T)) / 250.0)
 
     # ------------------------------------------------------------------
     # Power factor (-1.0 to +1.0; sign = leading/lagging)
     # ------------------------------------------------------------------
 
     def get_pf_a(self) -> float:
-        return self._signed16(self.read_reg(REG_PF_MEAN_A)) / 1000.0
+        return self._signed16(self.read_reg(REG_PF_MEAN_A)) / 1000.0 * self._ct_polarity_a
 
     def get_pf_b(self) -> float:
         return self._signed16(self.read_reg(REG_PF_MEAN_B)) / 1000.0
@@ -590,7 +601,7 @@ class ATM90E36:
         return self._signed16(self.read_reg(REG_PF_MEAN_C)) / 1000.0
 
     def get_pf_total(self) -> float:
-        return self._signed16(self.read_reg(REG_PF_MEAN_T)) / 1000.0
+        return self._signed16(self.read_reg(REG_PF_MEAN_T)) / 1000.0 * self._ct_polarity_a
 
     # ------------------------------------------------------------------
     # Frequency (Hz)
@@ -656,7 +667,7 @@ class ATM90E36:
     # ------------------------------------------------------------------
 
     def get_fundamental_power_a(self) -> float:
-        return self._signed16(self.read_reg(REG_PMEAN_AF)) / 1000.0
+        return self._signed16(self.read_reg(REG_PMEAN_AF)) / 1000.0 * self._ct_polarity_a
 
     def get_fundamental_power_b(self) -> float:
         return self._signed16(self.read_reg(REG_PMEAN_BF)) / 1000.0
@@ -665,10 +676,10 @@ class ATM90E36:
         return self._signed16(self.read_reg(REG_PMEAN_CF)) / 1000.0
 
     def get_fundamental_power_total(self) -> float:
-        return self._signed16(self.read_reg(REG_PMEAN_TF)) / 250.0
+        return self._signed16(self.read_reg(REG_PMEAN_TF)) / 250.0 * self._ct_polarity_a
 
     def get_harmonic_power_a(self) -> float:
-        return self._signed16(self.read_reg(REG_PMEAN_AH)) / 1000.0
+        return self._signed16(self.read_reg(REG_PMEAN_AH)) / 1000.0 * self._ct_polarity_a
 
     def get_harmonic_power_b(self) -> float:
         return self._signed16(self.read_reg(REG_PMEAN_BH)) / 1000.0
@@ -677,35 +688,32 @@ class ATM90E36:
         return self._signed16(self.read_reg(REG_PMEAN_CH)) / 1000.0
 
     def get_harmonic_power_total(self) -> float:
-        return self._signed16(self.read_reg(REG_PMEAN_TH)) / 250.0
+        return self._signed16(self.read_reg(REG_PMEAN_TH)) / 250.0 * self._ct_polarity_a
 
     # ------------------------------------------------------------------
     # Energy (Wh)
     # ------------------------------------------------------------------
 
-    def get_import_energy_wh(self) -> float:
-        """Total forward active energy in Wh."""
-        raw = self.read_reg(REG_AP_ENERGY_T)
-        return (raw / 32.0) * 3600.0
-
-    def get_export_energy_wh(self) -> float:
-        """Total reverse active energy in Wh."""
-        raw = self.read_reg(REG_AN_ENERGY_T)
-        return (raw / 32.0) * 3600.0
+    @staticmethod
+    def _energy_kwh(raw: int) -> float:
+        """Convert raw energy register to kWh: raw × 2^16 / PL_Constant."""
+        return raw * 65536.0 / _PL_CONSTANT
 
     def get_import_energy_kwh(self) -> float:
-        return self.get_import_energy_wh() / 1000.0
+        """Cumulative forward active energy in kWh (swaps register if CT reversed)."""
+        reg = REG_AN_ENERGY_T if self._ct_polarity_a < 0 else REG_AP_ENERGY_T
+        return self._energy_kwh(self.read_reg(reg))
 
     def get_export_energy_kwh(self) -> float:
-        return self.get_export_energy_wh() / 1000.0
+        """Cumulative reverse active energy in kWh (swaps register if CT reversed)."""
+        reg = REG_AP_ENERGY_T if self._ct_polarity_a < 0 else REG_AN_ENERGY_T
+        return self._energy_kwh(self.read_reg(reg))
 
-    def get_reactive_energy_total_wh(self) -> float:
-        raw = self.read_reg(REG_RP_ENERGY_T)
-        return (raw / 32.0) * 3600.0
+    def get_reactive_energy_total_kwh(self) -> float:
+        return self._energy_kwh(self.read_reg(REG_RP_ENERGY_T))
 
-    def get_apparent_energy_total_wh(self) -> float:
-        raw = self.read_reg(REG_SA_ENERGY_T)
-        return (raw / 32.0) * 3600.0
+    def get_apparent_energy_total_kwh(self) -> float:
+        return self._energy_kwh(self.read_reg(REG_SA_ENERGY_T))
 
     # ------------------------------------------------------------------
     # Status registers
@@ -741,6 +749,17 @@ class ATM90E36:
     # Fast snapshot — core power fields for high-rate sampling
     # ------------------------------------------------------------------
 
+    _FINE_FIELDS = frozenset({
+        "pa_harm", "p_total_harm", "qa", "q_total", "pf_a", "pf_total",
+        "pf_a_fund", "thd_va", "thd_ia",
+    })
+
+    @classmethod
+    def _round_values(cls, d: dict, ndigits: int = 1, fine: int = 3) -> dict:
+        return {k: round(v, fine if k in cls._FINE_FIELDS else ndigits)
+                if isinstance(v, float) else v
+                for k, v in d.items()}
+
     def read_fast(self) -> dict:
         """
         Read all real-time metering fields for Phase A (plus totals) at high rate.
@@ -749,40 +768,29 @@ class ATM90E36:
         At 200 kHz SPI / 100 kHz I2C this completes in roughly 10–15 ms,
         keeping the effective sample rate above 30 Hz.
         """
-        return {
-            # Voltage
+        return self._round_values({
             "va":            self.get_voltage_a(),
-            # Current
             "ia":            self.get_current_a(),
             "in_sampled":    self.get_current_n_sampled(),
             "in_calculated": self.get_current_n_calculated(),
-            # Active power
             "pa":            self.get_active_power_a(),
             "p_total":       self.get_active_power_total(),
-            # Reactive power
             "qa":            self.get_reactive_power_a(),
             "q_total":       self.get_reactive_power_total(),
-            # Apparent power
             "sa":            self.get_apparent_power_a(),
             "s_total":       self.get_apparent_power_total(),
-            # Power factor (total and fundamental)
             "pf_a":          self.get_pf_a(),
             "pf_total":      self.get_pf_total(),
             "pf_a_fund":     self.get_fundamental_power_a(),
             "p_total_fund":  self.get_fundamental_power_total(),
-            # Harmonic power
             "pa_harm":       self.get_harmonic_power_a(),
             "p_total_harm":  self.get_harmonic_power_total(),
-            # THD+N (Phase A only — B/C not wired)
             "thd_va":        self.get_thd_voltage_a(),
             "thd_ia":        self.get_thd_current_a(),
-            # Phase angle
             "phase_angle_a": self.get_phase_angle_a(),
-            # Grid frequency
             "frequency":     self.get_frequency(),
-            # System status (single register — cheap health check)
             "sys_status0":   self.get_sys_status0(),
-        }
+        })
 
     def read_slow(self) -> dict:
         """
@@ -790,16 +798,16 @@ class ATM90E36:
         and the remaining status registers.  Call every ~30 s alongside
         the high-rate read_fast() loop.
         """
-        return {
+        return self._round_values({
             "temperature":   self.get_temperature(),
             "import_kwh":    self.get_import_energy_kwh(),
             "export_kwh":    self.get_export_energy_kwh(),
-            "reactive_varh": self.get_reactive_energy_total_wh(),
-            "apparent_vah":  self.get_apparent_energy_total_wh(),
+            "reactive_kwh":  self.get_reactive_energy_total_kwh(),
+            "apparent_kwh":  self.get_apparent_energy_total_kwh(),
             "sys_status1":   self.get_sys_status1(),
             "meter_status0": self.get_meter_status0(),
             "meter_status1": self.get_meter_status1(),
-        }
+        })
 
     # ------------------------------------------------------------------
     # Full snapshot — all metering values in one dict
@@ -871,8 +879,8 @@ class ATM90E36:
             # Energy
             "import_kwh":      self.get_import_energy_kwh(),
             "export_kwh":      self.get_export_energy_kwh(),
-            "reactive_varh":   self.get_reactive_energy_total_wh(),
-            "apparent_vah":    self.get_apparent_energy_total_wh(),
+            "reactive_kwh":    self.get_reactive_energy_total_kwh(),
+            "apparent_kwh":    self.get_apparent_energy_total_kwh(),
             # Status
             "sys_status0":     self.get_sys_status0(),
             "sys_status1":     self.get_sys_status1(),
